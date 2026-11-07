@@ -152,6 +152,32 @@ UNDO begin → 逐行 Session::cmdline（等同手敲） → UNDO end
   `git fetch upstream && git merge upstream/main`
 - 提交前建议跑：`cargo xtask ci`（fmt、clippy、测试、资源、分层、wasm）
 
+## 9. 跟进上游更新
+
+上游迭代很快，AICAD 的增量很小（一个 `crates/ai` + 一个面板 + 约十个接线点），
+所以策略是**小步、常合并**：每周或上游发版后同步一次。
+
+```bash
+scripts/sync-upstream.sh
+```
+
+脚本会：检查工作区干净 → 拉取 `upstream/main`（shallow 仓库自动加深历史）→ 在
+`sync/upstream-<日期>-<上游提交>` 分支合并 → 跑 fmt、clippy（ai/ui）、AI 测试、
+UI 库测试、`cargo xtask layers`、wasm 检查。它**不推送、不动 main**；冲突时列出
+文件和热点，等你解决。
+
+通过后人工画面验证一次（窗口 ▸ AI 助手 → 画圆 → 应用 → Ctrl+Z），再：
+
+```bash
+git switch aicad-ai-assistant
+git merge --ff-only sync/upstream-<日期>-<上游提交>
+git push origin aicad-ai-assistant:main
+```
+
+冲突热点、上游 API 变化的影响面、发布与回滚步骤见
+[docs/upstream-sync.md](docs/upstream-sync.md)。
+
+
 ---
 
 **一句话**：把“说需求”变成“可审查的 CAD 命令”，并把整份命令变成一步撤销——这就是 AICAD。
