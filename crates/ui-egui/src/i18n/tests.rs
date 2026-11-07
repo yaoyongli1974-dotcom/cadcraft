@@ -97,6 +97,7 @@ fn missing_commands_menus_tools_and_snap_labels(language: &str) -> Vec<String> {
 fn missing_marked_ui_literals(language: &str) -> BTreeSet<String> {
     let catalog = catalog(language).unwrap();
     let modules = [
+        "ai_chat",
         "xrefs",
         "canvas",
         "chrome",

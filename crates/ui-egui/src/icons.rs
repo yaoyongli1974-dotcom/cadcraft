@@ -158,6 +158,7 @@ pub enum Icon {
     ZoomFit,
     TextStyle,
     DimStyle,
+    Ai,
 }
 
 struct Pen<'a> {
@@ -426,6 +427,13 @@ fn paint_draw_tools(pen: &Pen<'_>, icon: Icon, b: Color32, a: Color32, dim: bool
         Help => {
             pen.c(12.0, 12.0, 9.0, b);
             pen.text(12.0, 12.5, "?", 12.0, b);
+        }
+        Ai => {
+            // A speech bubble with a four-point spark: the assistant's own mark.
+            pen.poly(&[(3.5, 4.5), (20.5, 4.5), (20.5, 16.0), (10.5, 16.0), (6.5, 20.5), (6.5, 16.0), (3.5, 16.0)], true, b);
+            pen.la(12.0, 6.8, 12.0, 13.7);
+            pen.la(8.5, 10.25, 15.5, 10.25);
+            pen.dot(12.0, 10.25);
         }
         Line => {
             pen.la(4.0, 20.0, 20.0, 4.0);

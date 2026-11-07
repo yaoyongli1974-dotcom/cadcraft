@@ -1476,3 +1476,24 @@ menu	View	视图
 	Ctrl+Enter to apply	Ctrl+Enter 应用
 	Edit Text	编辑文字
 	The drawing changed. Close the window and open it again.	图纸已切换。请关闭窗口后重新打开。
+	AI Chat	AI 助手
+	Ask	提问
+	Ask the AI to draw or change something.	让 AI 绘制或修改图形。
+	Settings	设置
+	Provider	提供商
+	Offline	离线
+	OpenAI-compatible	OpenAI 兼容
+	Base URL	基础 URL
+	API Key	API 密钥
+	Empty = reads AICAD_AI_API_KEY	留空 = 读取 AICAD_AI_API_KEY
+	Temperature	温度
+	Test	测试
+	Describe the change you want	描述你想做的修改
+	Generating…	正在生成…
+	(answer)	（答复）
+	Draft ready — review and apply	草稿已生成 — 请检查后应用
+	No draft to apply	没有可应用的草稿
+	Applied {n} lines	已应用 {n} 行
+	One undo (Ctrl+Z) reverts the whole applied draft	一次撤销（Ctrl+Z）即可还原整份已应用的草稿
+	The AI request ended without an answer	AI 请求已结束，但没有返回结果
+	Testing needs an OpenAI-compatible provider	测试需要 OpenAI 兼容提供商

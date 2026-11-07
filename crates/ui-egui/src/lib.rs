@@ -17,6 +17,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::CADCRAFT
 };
 
+pub mod ai_chat;
 pub mod aliasdlg;
 pub mod animation;
 pub mod autosave;
@@ -138,6 +139,10 @@ pub struct UiState {
     pub last_lisp_dir: Option<String>,
     /// The folder the Command Aliases dialog last imported a `.pgp` file from.
     pub last_pgp_dir: Option<String>,
+    /// The AI chat palette: the conversation, its draft messages and the provider settings
+    /// (only the settings persist, through [`CadApp::prefs_json`]).
+    #[serde(skip)]
+    pub ai_chat: ai_chat::AiChatState,
 }
 
 /// A DXF/DWG file version (2000 … 2018).
@@ -218,6 +223,7 @@ impl Default for UiState {
             recent_files: Vec::new(),
             last_lisp_dir: None,
             last_pgp_dir: None,
+            ai_chat: ai_chat::AiChatState::default(),
         }
     }
 }
@@ -490,6 +496,8 @@ impl CadApp {
             "saveVersion": self.ui.save_version,
             "quickcalc": self.quickcalc.prefs(),
         });
+        // The AI chat settings only: the API key is left out, so it never reaches the settings file.
+        prefs["ai"] = ai_chat::settings_prefs(&self.ui.ai_chat.settings);
         if self.spacemouse.settings != spacemouse::Settings::default() {
             prefs["spacemouse"] = json!(self.spacemouse.settings);
         }
@@ -543,6 +551,11 @@ impl CadApp {
         }
         if let Some(keys) = v.get("shortcuts").filter(|k| k.is_object()) {
             self.ui.shortcuts = keys::from_prefs(keys);
+        }
+        if let Some(ai) = v.get("ai")
+            && let Ok(settings) = serde_json::from_value::<cadcraft_ai::AiSettings>(ai.clone())
+        {
+            self.ui.ai_chat.settings = settings;
         }
     }
 
