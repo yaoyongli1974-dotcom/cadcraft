@@ -15,7 +15,7 @@
 
 > **AICAD derivative:** this checkout adds an AI chat window that drafts drawing and
 > editing commands from a conversation, applies them as one undo group, and can talk to
-> any OpenAI-compatible model. See [AICAD.md](AICAD.md).
+> any OpenAI-compatible model. See [AICAD.md](AICAD.md) · [中文说明](README.zh-CN.md).
 
 <p align="center">
   <b>Computer-aided design and drafting; an open-source, modern 2D and 3D CAD application, built in pure Rust.</b>

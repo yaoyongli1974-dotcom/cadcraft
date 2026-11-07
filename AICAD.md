@@ -1,5 +1,7 @@
 # AICAD — a CADCraft derivative with an AI drafting window
 
+> 中文说明：[README.zh-CN.md](README.zh-CN.md)
+
 AICAD is a derivative of [CADCraft](https://github.com/storytold/cadcraft): the same
 clean-room, pure-Rust AutoCAD-style CAD application (MIT OR Apache-2.0), plus an **AI
 window** that turns a conversation into drawing and editing commands you review and
