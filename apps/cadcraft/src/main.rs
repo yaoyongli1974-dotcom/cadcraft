@@ -384,7 +384,8 @@ fn main() -> eframe::Result {
             // Autosave files (SAVEFILEPATH) default to `<settings dir>/autosave`.
             if let Some(dir) = &vars.config_dir {
                 app.enable_autosave(&dir.join("autosave"));
-                app.enable_update_check();
+                // No startup update check: this build is a derivative, and the upstream release
+                // carries no AI assistant. Help ▸ Check for Updates… opens this fork's releases.
                 // Startup LISP (acad.lsp, acaddoc.lsp) is read from `<settings>/support`; the
                 // folder is made so it is there to put them in.
                 let support = dir.join("support");

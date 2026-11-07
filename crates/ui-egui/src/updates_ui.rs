@@ -10,11 +10,17 @@ use crate::CadApp;
 /// The version this build reports to the update check.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// This derivative's releases page. Help ▸ Check for Updates… opens it; the app never replaces
+/// itself with an upstream CADCraft build, which would drop the AI assistant.
+const RELEASES_URL: &str = "https://github.com/yaoyongli1974-dotcom/cadcraft/releases";
+
 /// What the update check and prompt are doing between frames.
 pub struct Runtime {
     updater: Updater,
     /// Whether the host asked for a startup check (see [`CadApp::enable_update_check`]).
     enabled: bool,
+    /// Help ▸ Check for Updates… was chosen; the next frame opens the releases page.
+    releases_requested: bool,
     /// Help ▸ Check for Updates… was chosen; the next frame's `tick` starts it with the context.
     check_requested: bool,
     /// The check-result dialog is open (from a requested check until it is closed).
@@ -25,7 +31,14 @@ pub struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), enabled: false, check_requested: false, result_open: false, result_echoed: false }
+        Self {
+            updater: Updater::new(&crate::UPDATE_APP, VERSION),
+            enabled: false,
+            releases_requested: false,
+            check_requested: false,
+            result_open: false,
+            result_echoed: false,
+        }
     }
 }
 
@@ -36,16 +49,20 @@ impl CadApp {
     }
 }
 
-/// Help ▸ Check for Updates…: check now, and show the result when there is nothing newer.
+/// Help ▸ Check for Updates…: open this derivative's releases page.
 pub fn check_now(app: &mut CadApp) {
-    app.updates_rt.check_requested = true;
-    app.updates_rt.result_open = true;
+    app.updates_rt.releases_requested = true;
+    app.updates_rt.result_open = false;
     app.updates_rt.result_echoed = false;
 }
 
 /// Start the checks and collect the answers.
 pub fn tick(app: &mut CadApp, ctx: &egui::Context) {
     let rt = &mut app.updates_rt;
+    if std::mem::take(&mut rt.releases_requested) {
+        ctx.open_url(egui::OpenUrl::new_tab(RELEASES_URL));
+        return;
+    }
     if std::mem::take(&mut rt.check_requested) {
         rt.updater.check_now(ctx);
     } else if rt.enabled {
@@ -95,5 +112,21 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         // process has exited.
         Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         Action::None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Services;
+    use cadcraft_engine::Session;
+
+    #[test]
+    fn the_update_command_opens_this_forks_releases_page() {
+        let mut app = CadApp::new(Session::new(), Services::default());
+        check_now(&mut app);
+        assert!(app.updates_rt.releases_requested, "the next frame opens the fork's releases");
+        assert!(!app.updates_rt.result_open, "no upstream check dialog");
+        assert!(!app.updates_rt.enabled, "the startup check stays off");
     }
 }

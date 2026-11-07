@@ -78,5 +78,9 @@ works in the browser build.
   answers; the offline engine deliberately refuses them rather than guessing.
 - The panel's conversation is per session and is not written to disk; only provider
   settings persist.
+
+- **No upstream self-update.** The startup update check is off: installing the upstream
+  CADCraft release would replace this build with one that has no AI window. Help ▸
+  Check for Updates… opens this fork's releases page instead.
 - This derivative keeps CADCraft's license, code structure and upstream test conventions
   so upstream fixes remain mergeable.
