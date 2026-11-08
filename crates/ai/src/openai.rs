@@ -12,6 +12,7 @@
 use serde_json::Value;
 
 use crate::assistant::{ChatTurn, Draft};
+use crate::images::StagedImage;
 use crate::provider::OpenAiSettings;
 
 const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
@@ -22,8 +23,9 @@ const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 /// Endpoint error payloads keep this many characters in the message.
 const ERROR_SNIPPET_CHARS: usize = 300;
 
-/// Ask `{base_url}/chat/completions` with the system prompt + context + history.
-pub fn chat(settings: &OpenAiSettings, context: &str, history: &[ChatTurn], user: &str) -> Result<Draft, String> {
+/// Ask `{base_url}/chat/completions` with the system prompt + context + history;
+/// `images` ride the newest user turn as data-URL parts.
+pub fn chat(settings: &OpenAiSettings, context: &str, history: &[ChatTurn], user: &str, images: &[StagedImage]) -> Result<Draft, String> {
     if settings.base_url.trim().is_empty() {
         return Err(String::from("OpenAI mode is missing its Base URL (设置里还没有 Base URL)"));
     }
@@ -31,7 +33,7 @@ pub fn chat(settings: &OpenAiSettings, context: &str, history: &[ChatTurn], user
         return Err(String::from("OpenAI mode is missing its model name (设置里还没有模型名)"));
     }
     let endpoint = join_completions(&settings.base_url);
-    let body = request_body(settings, context, history, user);
+    let body = request_body(settings, context, history, user, images);
     log::debug!("LLM chat request to {endpoint} with model {}", settings.model);
     let raw = send(&endpoint, &settings.api_key, &body)?;
     let reply_text = strip_choices(&raw)?;
@@ -45,7 +47,9 @@ pub(crate) fn join_completions(base_url: &str) -> String {
     if base.ends_with("/chat/completions") { base.to_owned() } else { format!("{base}/chat/completions") }
 }
 
-pub(crate) fn request_body(settings: &OpenAiSettings, context: &str, history: &[ChatTurn], user: &str) -> Value {
+/// Build the request. Without `images` the user message is the plain string it has
+/// always been, so the wire shape and size for existing setups is unchanged.
+pub(crate) fn request_body(settings: &OpenAiSettings, context: &str, history: &[ChatTurn], user: &str, images: &[StagedImage]) -> Value {
     let window = history
         .iter()
         .map(|turn| {
@@ -61,7 +65,7 @@ pub(crate) fn request_body(settings: &OpenAiSettings, context: &str, history: &[
     let mut messages = vec![serde_json::json!({ "role": "system", "content": SYSTEM_PROMPT })];
     messages.push(serde_json::json!({ "role": "user", "content": format!("DRAWING CONTEXT\n{context}\n") }));
     messages.extend(window);
-    messages.push(serde_json::json!({ "role": "user", "content": user }));
+    messages.push(serde_json::json!({ "role": "user", "content": crate::images::user_content(user, images) }));
     serde_json::json!({
         "model": settings.model,
         "messages": messages,

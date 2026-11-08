@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::assistant::{ChatTurn, Draft};
+use crate::images::StagedImage;
 
 /// Which provider turns a request into a command draft.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -67,21 +68,34 @@ impl AiSettings {
     }
 }
 
-/// Produce a draft for `user` given conversation history and a drawing context block.
-pub fn generate(settings: &AiSettings, context: &str, history: &[ChatTurn], user: &str) -> Result<Draft, String> {
+/// Produce a draft for `user` given conversation history, a drawing context block and
+/// optional reference images (carried on the newest turn only; the offline rule
+/// engine sees none and answers with a mention instead).
+pub fn generate(settings: &AiSettings, context: &str, history: &[ChatTurn], user: &str, images: &[StagedImage]) -> Result<Draft, String> {
+    if images.len() > crate::images::MAX_IMAGES {
+        return Err(format!("At most {} images per ask; drop one and try again", crate::images::MAX_IMAGES));
+    }
     // The wasm build has no HTTP provider, so the history is only read natively.
     #[cfg(target_arch = "wasm32")]
     let _ = history;
     settings.usable()?;
     match settings.mode {
-        AiMode::Offline => crate::rules::offline_draft(user, context),
+        AiMode::Offline => {
+            if images.is_empty() {
+                crate::rules::offline_draft(user, context)
+            } else {
+                let mut draft = crate::rules::offline_draft(user, context)?;
+                draft.reply.insert_str(0, "The offline engine sees no pixels. ");
+                Ok(draft)
+            }
+        }
         AiMode::OpenAi => {
             #[cfg(target_arch = "wasm32")]
             {
                 Err(String::from("OpenAI provider is unavailable on wasm; the offline rule engine still works"))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            crate::openai::chat(&settings.openai, context, history, user)
+            crate::openai::chat(&settings.openai, context, history, user, images)
         }
     }
 }

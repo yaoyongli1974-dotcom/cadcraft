@@ -9,7 +9,7 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
-use cadcraft_ai::{AiMode, AiSettings, ChatTurn, Draft, LineKind, LineReport, Role};
+use cadcraft_ai::{AiMode, AiSettings, ChatTurn, Draft, LineKind, LineReport, Role, StagedImage};
 use cadcraft_engine::Session;
 use egui::RichText;
 use serde_json::{Value, json};
@@ -19,6 +19,20 @@ use crate::theme::Tokens;
 
 /// Turns remembered for the provider: the newest this many are kept.
 pub const HISTORY_LIMIT: usize = 24;
+
+/// One staged reference image waiting to ride the next ask; its thumbnail texture is
+/// decoded once, on the first frame it is drawn.
+#[derive(Clone)]
+pub struct PendingImage {
+    pub image: cadcraft_ai::StagedImage,
+    tex: Option<egui::TextureHandle>,
+}
+
+impl std::fmt::Debug for PendingImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingImage").field("image", &self.image).field("tex", &self.tex.is_some()).finish()
+    }
+}
 
 /// The chat as the session remembers it. Only the settings are persisted, through
 /// [`CadApp::prefs_json`] (without the API key); messages and history stay in memory.
@@ -31,8 +45,11 @@ pub struct AiChatState {
     pub busy: bool,
     /// The line being typed.
     pub input: String,
+    /// Reference images staged from the file dialog, a typed path, a paste or a drop;
+    /// they clear when the next ask is sent.
+    pub pending: Vec<PendingImage>,
     /// The running request's answer channel, shared with clones of this state.
-    pending: Option<Arc<Mutex<Receiver<Result<Draft, String>>>>>,
+    pending_request: Option<Arc<Mutex<Receiver<Result<Draft, String>>>>>,
 }
 
 impl std::fmt::Debug for AiChatState {
@@ -59,13 +76,18 @@ pub struct AiMessage {
     pub preview: Vec<LineKind>,
     pub applied: bool,
     pub report: Option<LineReport>,
+    /// Reference images that rode this user line (shown as a count, not kept alive).
+    pub attachments: usize,
     /// The request failed (or a later action did): its text is shown in the error colour.
     pub error: bool,
 }
 
 impl AiMessage {
     fn user(text: String) -> Self {
-        Self { role: Role::User, text, script: None, preview: Vec::new(), applied: false, report: None, error: false }
+        Self { role: Role::User, text, script: None, preview: Vec::new(), applied: false, report: None, attachments: 0, error: false }
+    }
+    fn user_with(text: String, attachments: usize) -> Self {
+        Self { attachments, ..Self::user(text) }
     }
 
     fn assistant(draft: Draft) -> Self {
@@ -77,11 +99,20 @@ impl AiMessage {
             draft.reply.trim()
         }
         .to_string();
-        Self { role: Role::Assistant, text, script: has_script.then_some(draft.script), preview, applied: false, report: None, error: false }
+        Self {
+            role: Role::Assistant,
+            text,
+            script: has_script.then_some(draft.script),
+            preview,
+            applied: false,
+            report: None,
+            attachments: 0,
+            error: false,
+        }
     }
 
     fn error(text: String) -> Self {
-        Self { role: Role::Assistant, text, script: None, preview: Vec::new(), applied: false, report: None, error: true }
+        Self { role: Role::Assistant, text, script: None, preview: Vec::new(), applied: false, report: None, attachments: 0, error: true }
     }
 }
 
@@ -101,8 +132,12 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut test = false;
     settings_section(&mut state, ui, &mut test);
     ui.separator();
-    messages_section(app, &mut state, ui, &ctx);
+    // Leave the input row and the attachment tray their room, so staging an image never
+    // pushes the ask field out of the palette (or the command line steals the typing).
+    let reserved = if state.pending.is_empty() { 72.0 } else { 182.0 };
+    messages_section(app, &mut state, ui, &ctx, reserved);
     input_section(app, &mut state, ui, &ctx);
+    attachments_section(&mut state, ui, &ctx);
     if test {
         request(&app.session, &mut state, &ctx, String::from("ping: 请回复一个空 script 的 JSON 草稿"), false);
     }
@@ -153,12 +188,12 @@ fn settings_section(state: &mut AiChatState, ui: &mut egui::Ui, test: &mut bool)
 }
 
 /// The conversation: user lines right-aligned, assistant lines left-aligned with their draft.
-fn messages_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui, ctx: &egui::Context) {
+fn messages_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui, ctx: &egui::Context, reserved: f32) {
     let t = Tokens::get();
     let mut apply_at = None;
     let mut discard_at = None;
-    // Leave the input row its room; the settings block has already taken what it needs.
-    let height = (ui.available_height() - 64.0).max(60.0);
+    // Leave the input row (and, with images staged, the tray) its room.
+    let height = (ui.available_height() - reserved).max(60.0);
     egui::ScrollArea::vertical().id_salt("ai-chat-messages").stick_to_bottom(true).auto_shrink([false, false]).max_height(height).show(ui, |ui| {
         if state.messages.is_empty() {
             ui.label(RichText::new(crate::tl!("Ask the AI to draw or change something.")).color(t.text_faint));
@@ -167,6 +202,9 @@ fn messages_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui
             ui.push_id(("ai-chat-message", index), |ui| match message.role {
                 Role::User => {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        if message.attachments > 0 {
+                            ui.label(RichText::new(crate::tf!("📎 {n}", n = message.attachments)).small().color(t.text_dim));
+                        }
                         ui.label(RichText::new(&message.text).color(t.text));
                     });
                 }
@@ -207,10 +245,13 @@ fn assistant_message(ui: &mut egui::Ui, message: &mut AiMessage, index: usize, a
             ui.horizontal(|ui| {
                 let apply = ui.add_enabled(!message.applied && !message.preview.is_empty(), egui::Button::new(crate::tl!("Apply")));
                 let apply = if message.preview.is_empty() { apply.on_disabled_hover_text(crate::tl!("No draft to apply")) } else { apply };
+                crate::control::record_widget(ui, &apply, "AI apply", "button", None);
                 if apply.clicked() {
                     *apply_at = Some(index);
                 }
-                if ui.add_enabled(!message.applied, egui::Button::new(crate::tl!("Discard"))).clicked() {
+                let discard = ui.add_enabled(!message.applied, egui::Button::new(crate::tl!("Discard")));
+                crate::control::record_widget(ui, &discard, "AI discard", "button", None);
+                if discard.clicked() {
                     *discard_at = Some(index);
                 }
             });
@@ -245,7 +286,75 @@ fn apply(app: &mut CadApp, state: &mut AiChatState, index: usize) {
     }
 }
 
-/// The single-line ask field and its button.
+/// The staged reference images, their thumbnails and the removals.
+fn attachments_section(state: &mut AiChatState, ui: &mut egui::Ui, ctx: &egui::Context) {
+    if state.pending.is_empty() {
+        return;
+    }
+    let t = Tokens::get();
+    ui.add_space(2.0);
+    let mut removed = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(crate::tl!("References on the next ask")).small().color(t.text_faint));
+        if ui.button(crate::tl!("Clear")).clicked() {
+            state.pending.clear();
+        }
+    });
+    let thumbs: Vec<(usize, egui::TextureHandle)> =
+        state.pending.iter_mut().enumerate().map(|(index, pending)| (index, thumbnail(ctx, pending))).collect();
+    egui::ScrollArea::horizontal().id_salt("ai-chat-thumbs").auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            for (index, tex) in thumbs {
+                let size = thumb_size(tex.size_vec2(), 72.0);
+                ui.vertical(|ui| {
+                    ui.add(egui::Image::new(&tex).fit_to_exact_size(size).corner_radius(2.0));
+                    if ui.button(RichText::new(crate::tl!("Remove")).small()).clicked() {
+                        removed = Some(index);
+                    }
+                });
+            }
+        });
+    });
+    if let Some(index) = removed {
+        state.pending.remove(index);
+    }
+}
+
+/// The size that fits the thumbnail square while staying the image's aspect.
+fn thumb_size(size: egui::Vec2, max: f32) -> egui::Vec2 {
+    let side = size.x.max(size.y).max(1.0);
+    let factor = max / side;
+    egui::Vec2::new(size.x * factor, size.y * factor)
+}
+
+fn thumbnail(ctx: &egui::Context, pending: &mut PendingImage) -> egui::TextureHandle {
+    if let Some(tex) = &pending.tex {
+        return tex.clone();
+    }
+    let decoded = decode_pixels(&pending.image);
+    let name = format!("ai-chat-{}/{:x}", pending.image.name, pending.image.data_b64.len());
+    let tex = match decoded {
+        Some(pixels) => ctx.load_texture(
+            name,
+            egui::ColorImage::from_rgba_unmultiplied([pixels.0 as usize, pixels.1 as usize], &pixels.2),
+            egui::TextureOptions::LINEAR,
+        ),
+        None => ctx.load_texture(name, egui::ColorImage::new([4, 4], vec![egui::Color32::RED; 16]), egui::TextureOptions::LINEAR),
+    };
+    pending.tex = Some(tex.clone());
+    tex
+}
+
+/// Decode the staged bytes to `(width, height, rgba8)`.
+fn decode_pixels(image: &cadcraft_ai::StagedImage) -> Option<(u32, u32, Vec<u8>)> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&image.data_b64).ok()?;
+    let decoded = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let (width, height) = (decoded.width(), decoded.height());
+    Some((width, height, decoded.into_raw()))
+}
+
+/// The single-line ask field, its image buttons, and the typed-path shortcut.
 fn input_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui, ctx: &egui::Context) {
     let t = Tokens::get();
     ui.add_space(4.0);
@@ -256,6 +365,7 @@ fn input_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui, c
             !state.busy,
             egui::TextEdit::singleline(&mut state.input).desired_width(width).hint_text(crate::tl!("Describe the change you want")),
         );
+        crate::control::record_widget(ui, &edit, "AI ask", "text", None);
         if edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
             submit = true;
         }
@@ -268,10 +378,125 @@ fn input_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui, c
             ui.label(RichText::new(crate::tl!("Generating…")).small().color(t.text_dim));
         }
     });
+    ui.horizontal_wrapped(|ui| {
+        let picker = app.services.pick_image.is_some();
+        let add = ui.add_enabled(picker, egui::Button::new(crate::tl!("Add image")).small());
+        let add = if picker { add } else { add.on_disabled_hover_text(crate::tl!("This build has no file dialog; drop or paste an image instead")) };
+        crate::control::record_widget(ui, &add, "Add image", "button", None);
+        if add.clicked() {
+            add_from_picker(app, state);
+        }
+        let paste = ui.button(RichText::new(crate::tl!("Paste image")).small());
+        crate::control::record_widget(ui, &paste, "Paste image", "button", None);
+        if paste.clicked() {
+            paste_image(state);
+        }
+        if let Some(path) = typed_image_path(&state.input) {
+            let add = ui.button(RichText::new(crate::tl!("Add as image")).small());
+            crate::control::record_widget(ui, &add, "Add as image", "button", None);
+            if add.clicked() {
+                stage(state, cadcraft_ai::stage_file(&path));
+                state.input.clear();
+                ctx.request_repaint();
+            }
+        }
+    });
     if submit {
         let text = state.input.clone();
         request(&app.session, state, ctx, text, true);
     }
+}
+
+/// A bare typed path that is an existing image file: the input doubles as a picker.
+fn typed_image_path(input: &str) -> Option<std::path::PathBuf> {
+    let word = input.trim();
+    if !(word.contains('/') || word.contains('\\') || word.contains(':')) {
+        return None;
+    }
+    let path = std::path::PathBuf::from(word);
+    let ext = path.extension()?.to_string_lossy().to_string();
+    cadcraft_ai::is_image_ext(&ext)?;
+    path.is_file().then_some(path)
+}
+
+/// Stage whatever the host's image picker returns; a cancelled picker stays quiet.
+fn add_from_picker(app: &mut CadApp, state: &mut AiChatState) {
+    let Some(path) = app.services.pick_image.as_ref().and_then(|pick| pick()) else { return };
+    stage(state, cadcraft_ai::stage_file(std::path::Path::new(&path)));
+}
+
+/// Stage the clipboard's image, if there is one; a failure becomes a chat line.
+#[allow(clippy::unnecessary_wraps)]
+fn paste_image(state: &mut AiChatState) {
+    match clipboard_stage() {
+        Ok(staged) => {
+            if state.pending.len() >= cadcraft_ai::MAX_IMAGES {
+                state.messages.push(AiMessage::error(format!("At most {} images per ask; remove one first", cadcraft_ai::MAX_IMAGES)));
+            } else {
+                state.pending.push(PendingImage { image: staged, tex: None });
+            }
+        }
+        Err(e) => state.messages.push(AiMessage::error(e)),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clipboard_stage() -> Result<cadcraft_ai::StagedImage, String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("The clipboard is not available: {e}"))?;
+    let image = clipboard
+        .get_image()
+        .map_err(|_| String::from("The clipboard has no image; paste a screenshot and try again (PNG, JPEG, BMP or TIFF are accepted)"))?;
+    let rgba = image::RgbaImage::from_raw(image.width as u32, image.height as u32, image.bytes.into_owned())
+        .ok_or_else(|| String::from("The clipboard image is empty"))?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| format!("The clipboard image cannot be saved: {e}"))?;
+    cadcraft_ai::stage_bytes("clipboard", &png)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn clipboard_stage() -> Result<cadcraft_ai::StagedImage, String> {
+    Err(String::from("The web build cannot read clipboard images; drop the file or add it with Add image"))
+}
+
+/// A staged image arrives from any source: cap-checked, errors become chat lines.
+fn stage(state: &mut AiChatState, staged: Result<cadcraft_ai::StagedImage, String>) {
+    match staged {
+        Ok(image) => {
+            if state.pending.len() >= cadcraft_ai::MAX_IMAGES {
+                state.messages.push(AiMessage::error(format!("At most {} images per ask; remove one first", cadcraft_ai::MAX_IMAGES)));
+            } else {
+                state.pending.push(PendingImage { image, tex: None });
+            }
+        }
+        Err(e) => state.messages.push(AiMessage::error(e)),
+    }
+}
+
+/// A dropped path lands with the chat when the palette is open and the file is one of
+/// our image formats; `None` leaves the drop to the usual open-drawing behaviour.
+///
+/// Returns `Some(())` when the drop was consumed as a chat reference so the caller can
+/// skip `open_path`.
+pub fn attached_image(app: &mut CadApp, path: &std::path::Path, ext: &str) -> Option<()> {
+    let panel_open = app.ui.docking.layout.contains(&crate::docking::Panel::AiChat);
+    if !panel_open || cadcraft_ai::is_image_ext(ext).is_none() {
+        return None;
+    }
+    let staged = cadcraft_ai::stage_file(path);
+    stage(&mut app.ui.ai_chat, staged);
+    Some(())
+}
+
+/// Same for a web drop, where the bytes ride the event itself.
+pub fn attached_bytes(app: &mut CadApp, name: &str, bytes: &[u8]) -> Option<()> {
+    let panel_open = app.ui.docking.layout.contains(&crate::docking::Panel::AiChat);
+    if !panel_open {
+        return None;
+    }
+    stage(&mut app.ui.ai_chat, cadcraft_ai::stage_bytes(name, bytes));
+    Some(())
 }
 
 /// Ask the provider on a worker thread, over a detached copy of the open drawings.
@@ -280,20 +505,24 @@ fn request(session: &Session, state: &mut AiChatState, ctx: &egui::Context, user
     if text.is_empty() || state.busy {
         return;
     }
+    // The staged images ride this turn only: staged text ("📎 n") is display-only,
+    // history keeps the typed line for the provider's memory window.
+    let images: Vec<StagedImage> = state.pending.drain(..).map(|pending| pending.image).collect();
+    let attachments = images.len();
     state.busy = true;
     if echo {
         state.input.clear();
-        state.messages.push(AiMessage::user(text.clone()));
+        state.messages.push(AiMessage::user_with(text.clone(), attachments));
         push_history(state, Role::User, &text);
     }
     let settings = resolved_settings(&state.settings);
     let history = state.history.clone();
     let mut detached = detached_session(session);
     let (tx, rx) = std::sync::mpsc::channel();
-    state.pending = Some(Arc::new(Mutex::new(rx)));
+    state.pending_request = Some(Arc::new(Mutex::new(rx)));
     let ctx = ctx.clone();
     let work = move || {
-        let result = cadcraft_ai::suggest(&mut detached, &settings, &history, &text);
+        let result = cadcraft_ai::suggest(&mut detached, &settings, &history, &text, &images);
         let _ = tx.send(result);
         ctx.request_repaint();
     };
@@ -307,7 +536,7 @@ fn request(session: &Session, state: &mut AiChatState, ctx: &egui::Context, user
 
 /// Take one finished answer from the worker, if there is one.
 fn poll(state: &mut AiChatState) {
-    let Some(pending) = state.pending.clone() else { return };
+    let Some(pending) = state.pending_request.clone() else { return };
     let mut result = None;
     let mut lost = false;
     match pending.lock() {
@@ -319,12 +548,14 @@ fn poll(state: &mut AiChatState) {
         Err(_) => lost = true,
     }
     if let Some(answer) = result {
-        state.pending = None;
         state.busy = false;
+        // The answer is taken: drop the channel, or every later frame sees it disconnected
+        // and reports "ended without an answer" again.
+        state.pending_request = None;
         finish(state, answer);
     } else if lost {
-        state.pending = None;
         state.busy = false;
+        state.pending_request = None;
         state.messages.push(AiMessage::error(crate::tl!("The AI request ended without an answer").to_string()));
     }
 }
@@ -443,6 +674,19 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_request_is_not_reported_twice() {
+        let mut state = AiChatState::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        state.pending_request = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
+        state.busy = true;
+        poll(&mut state);
+        poll(&mut state);
+        assert_eq!(state.messages.iter().filter(|m| m.error).count(), 1, "one lost request, one error");
+        assert!(!state.busy && state.pending_request.is_none());
+    }
+
+    #[test]
     fn a_failed_request_is_shown_as_an_error_line() {
         let mut state = AiChatState::default();
         finish(&mut state, Err(String::from("no key")));
@@ -461,5 +705,62 @@ mod tests {
         assert!(message.script.is_some());
         assert_eq!(message.preview.len(), 1);
         assert_eq!(state.history.len(), 1);
+    }
+
+    /// A small PNG, small enough for `stage_bytes` to keep as-is.
+    fn tiny_png_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbaImage::from_pixel(8, 5, image::Rgba([40, 90, 160, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("a 8x5 png encodes");
+        out
+    }
+
+    fn a_test_png_on_disk() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join("aicad-ai-chat-test.png");
+        std::fs::write(&path, tiny_png_bytes()).expect("the sample is written");
+        path
+    }
+
+    #[test]
+    fn staged_references_respect_the_per_ask_cap() {
+        let mut state = AiChatState::default();
+        for _ in 0..cadcraft_ai::MAX_IMAGES {
+            stage(&mut state, cadcraft_ai::stage_bytes("tiny.png", &tiny_png_bytes()));
+        }
+        assert_eq!(state.pending.len(), cadcraft_ai::MAX_IMAGES);
+        assert!(state.messages.is_empty());
+        stage(&mut state, cadcraft_ai::stage_bytes("tiny.png", &tiny_png_bytes()));
+        assert_eq!(state.pending.len(), cadcraft_ai::MAX_IMAGES, "the extra image is refused");
+        assert_eq!(state.messages.len(), 1);
+        assert!(state.messages[0].error);
+    }
+
+    #[test]
+    fn a_dropped_image_reaches_the_chat_only_with_the_palette_open() {
+        let path = a_test_png_on_disk();
+        let mut app = CadApp::new(Session::new(), Services::default());
+        assert_eq!(crate::ai_chat::attached_image(&mut app, &path, "png"), None, "closed palette: the drop stays an open-drawing action");
+        assert!(app.ui.ai_chat.pending.is_empty());
+
+        toggle(&mut app).expect("the palette opens");
+        assert_eq!(crate::ai_chat::attached_image(&mut app, &path, "png"), Some(()));
+        assert_eq!(app.ui.ai_chat.pending.len(), 1);
+
+        // A non-image drop is never consumed by the chat.
+        assert_eq!(crate::ai_chat::attached_image(&mut app, &path, "dxf"), None);
+        assert_eq!(app.ui.ai_chat.pending.len(), 1);
+        assert!(!app.ui.ai_chat.messages.iter().any(|message| message.error), "{:?}", app.ui.ai_chat.messages);
+    }
+
+    #[test]
+    fn the_typed_path_shortcut_accepts_only_existing_images() {
+        let path = a_test_png_on_disk();
+        assert_eq!(typed_image_path("draw a circle 0,0 5"), None);
+        assert_eq!(typed_image_path(path.to_string_lossy().as_ref()), Some(path.clone()));
+        let bogus = std::env::temp_dir().join("aicad-missing-9e21.png");
+        let _ = std::fs::remove_file(&bogus);
+        assert_eq!(typed_image_path(bogus.to_string_lossy().as_ref()), None);
+        let _ = std::fs::remove_file(&path);
     }
 }

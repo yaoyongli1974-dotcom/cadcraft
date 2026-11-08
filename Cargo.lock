@@ -646,7 +646,9 @@ dependencies = [
 name = "cadcraft-ai"
 version = "0.17.0"
 dependencies = [
+ "base64 0.23.1",
  "cadcraft-engine",
+ "image",
  "log",
  "serde",
  "serde_json",
@@ -809,6 +811,8 @@ dependencies = [
 name = "cadcraft-ui-egui"
 version = "0.17.0"
 dependencies = [
+ "arboard",
+ "base64 0.23.1",
  "cadcraft-ai",
  "cadcraft-color",
  "cadcraft-doc",

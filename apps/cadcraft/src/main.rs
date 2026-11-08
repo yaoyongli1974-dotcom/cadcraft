@@ -189,6 +189,13 @@ fn services() -> Services {
             };
             dialog.pick_file().map(|p| p.to_string_lossy().to_string())
         })),
+        pick_image: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter(i18n::t("Images (PNG, JPEG, BMP, TIFF)"), &["png", "jpg", "jpeg", "bmp", "tif", "tiff"])
+                .add_filter(i18n::t("All files"), &["*"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
     }
 }
 

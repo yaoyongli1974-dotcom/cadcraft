@@ -15,6 +15,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+# Staging reference images for the model: sniff format, bound the size, optionally
+# downscale, and hand the provider a data URL. Pure Rust decoders keep the wasm gate.
+image = { workspace = true }
+base64 = "0.23"
 
 # LLM HTTP access is native-only; the wasm build keeps the offline rule engine.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

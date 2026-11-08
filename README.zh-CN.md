@@ -35,6 +35,8 @@ circle 0,0 30
 | OpenAI 兼容接口 | OpenAI、DeepSeek、通义千问、Kimi、智谱、Ollama、vLLM、LM Studio 等 |
 | 密钥安全 | API Key 只来自环境变量或当前会话输入，**绝不写入偏好文件** |
 | 中文界面 | 新增文案全部有中文翻译；菜单/面板/提示一致 |
+| 图片参考 | 把截图/草图附在提问里（拖拽、粘贴、文件选择或输入路径），最多 4 张，随消息发给多模态模型 |
+| 更大的对话窗口 | AI 助手独占右边缘一整列（默认 360px、全高），消息区可滚动，输入区常驻 |
 | wasm 兼容 | AI crate 可在 `wasm32-unknown-unknown` 编译；浏览器版使用离线引擎 |
 
 ## 3. 快速开始
@@ -83,15 +85,40 @@ export AICAD_AI_API_KEY=sk-...
 `{"reply": "...", "script": "..."}`；也接受 Markdown 代码块兜底。超时 120 秒，
 请求在后台线程执行，不阻塞界面。
 
+### 3.3 图片参考
+
+需要让模型“看着图改图”时，把图片放进下一次提问：
+
+| 输入方式 | 说明 |
+| --- | --- |
+| 拖拽 | 把图片文件拖进 CADCraft 窗口；AI 助手面板打开时，图片自动加入待发送列表（原生与浏览器版） |
+| 粘贴 | 点 **粘贴图片**，读取系统剪贴板中的位图（原生版；浏览器版请用拖拽或文件选择） |
+| 文件选择 | 点 **添加图片**，选择本地文件（原生版；需系统文件对话框） |
+| 路径 | 在输入框里输入或粘贴图片路径，点出现的 **作为图片添加** |
+
+限制与处理：
+
+- 格式：PNG、JPEG、BMP、TIFF（按文件内容识别，不只看扩展名）
+- 大小：单张原始文件 ≤ 16 MB；最长边超过 2048 px 时自动等比缩小
+- 数量：每次提问最多 4 张，面板会显示缩略图，可单张移除或一次清空
+- 编码：小图保持原格式；较大或缩放后的图统一转成 JPEG（质量 88）以控制请求体积
+- 发送：作为 OpenAI 兼容的 `image_url` 内容块（`data:<mime>;base64,…`）随最后一条用户消息发出；
+  文本与上下文保持原样
+- 兼容：不带图片时请求体与旧版**完全一致**；偏好、草稿、脚本格式均未改变
+- 离线模式没有视觉能力：附了图片时回复会以
+  `The offline engine sees no pixels.` 开头，再按文字规则处理（图片不会上传）
+
+图片只在当前提问中发送，不会写入图纸、偏好或日志。
+
 ## 4. 工作原理
 
 ```
-用户输入
+用户输入（文字 + 可选图片）
    │
    ├─ 采集上下文：drawing.inspect（图层/范围/选择集/实体样本）
    │
-   ├─ 离线：rules::offline_draft（中英文规则）
-   └─ 在线：POST /chat/completions → {"reply","script"}
+   ├─ 离线：rules::offline_draft（中英文规则；图片仅提示无法识别）
+   └─ 在线：POST /chat/completions（文本 + image_url 内容块）→ {"reply","script"}
    │
 草稿预览（executor::dry_run 逐行分类）
    │  用户点“应用”
@@ -105,6 +132,7 @@ UNDO begin → 逐行 Session::cmdline（等同手敲） → UNDO end
 
 - **AI 不改文档内部状态**，只产生命令字符串；执行路径与命令行/脚本/MCP 完全相同
 - 草稿在**分离的会话副本**上读取上下文，后台线程不碰正在编辑的图纸
+- 图片只存在于当次请求的消息内容中，不进入图纸、偏好或撤销栈
 - 系统提示词禁止在脚本里写 `UNDO`，撤销边界由执行器统一管理
 - 分层：`crates/ai` 位于 L4（`engine → ai`），UI 在 L5；`cargo xtask layers` 强制
 
@@ -112,12 +140,14 @@ UNDO begin → 逐行 Session::cmdline（等同手敲） → UNDO end
 
 | 路径 | 内容 |
 | --- | --- |
-| `crates/ai/` | 新增 AI crate：`assistant`、`provider`、`openai`、`rules`、`executor`、`prompts/system.md` |
-| `crates/ui-egui/src/ai_chat.rs` | AI 助手面板（会话、草稿、设置、后台请求） |
-| `crates/ui-egui/src/docking.rs` | `Panel::AiChat` 面板注册（按需打开） |
+| `crates/ai/` | 新增 AI crate：`assistant`、`provider`、`openai`、`rules`、`executor`、`images`、`prompts/system.md` |
+| `crates/ui-egui/src/ai_chat.rs` | AI 助手面板（会话、草稿、设置、图片缩略图、后台请求） |
+| `crates/ui-egui/src/docking.rs` | `Panel::AiChat` 面板注册；独占右边缘全高列（`AI_CHAT_WIDTH = 360`） |
+| `crates/ui-egui/src/lib.rs` | 面板状态、偏好接线；窗口拖拽图片的接入点 |
 | `crates/ui-egui/src/menus.rs` | 菜单项 `ui.panel.aiChat` |
 | `crates/ui-egui/src/{icons,theme}.rs` | AI 图标、错误色 |
 | `crates/ui-egui/src/i18n/zh.tsv` | 中文文案 |
+| `apps/cadcraft/src/main.rs` | 图片文件对话框服务 |
 | `xtask/src/layers.rs` | `ai` 分层登记与同层顺序 |
 | `AICAD.md` / 本文件 | 衍生版说明 |
 
@@ -127,20 +157,21 @@ UNDO begin → 逐行 Session::cmdline（等同手敲） → UNDO end
 
 | 检查 | 结果 |
 | --- | --- |
-| `cargo test -p cadcraft-ai` | 43 通过（含“规则草稿在真实 Session 上可执行”） |
-| `cargo test -p cadcraft-ui-egui --lib` | 261 通过（含 6 个面板测试） |
+| `cargo test -p cadcraft-ai` | 49 通过（含规则草稿真实执行、图片缩放/编码/上限测试） |
+| `cargo test -p cadcraft-ui-egui --lib` | 269 通过（含 9 个面板测试） |
 | `cargo clippy -p cadcraft-ai -p cadcraft-ui-egui --all-targets -- -D warnings` | 0 警告 |
 | `cargo fmt --check` | 通过 |
 | `cargo xtask layers` | 通过（17 crates，无违规） |
 | `cargo check -p cadcraft-ai --target wasm32-unknown-unknown` | 通过 |
-| 真实界面（Xvfb + lavapipe） | 输入“以 0,0 为圆心画半径 30 的圆”→ 草稿 `circle 0,0 30` → 应用后 Circle 7→8 → 一次 `UNDO`（Group）回到 7 |
+| 真实界面（Xvfb + lavapipe） | AI 助手为独立全高列；输入图片路径→缩略图→提问，离线回复以 `The offline engine sees no pixels.` 开头并生成 `circle 0,0 30`；应用后实体 46→47，一次 `UNDO`（Group）回到 46 |
 
 ## 7. 已知限制
 
 - **不会自动升级到上游**：衍生版移除了启动时的上游更新检查；**帮助 ▸ 检查更新…** 打开本项目的 Releases 页。请不要手动安装官方 CADCraft 覆盖本包——官方版本不含 AI 助手
-- 离线规则覆盖常见模板，不是通用自然语言理解；复杂需求请接入大模型
+- 离线规则覆盖常见模板，不是通用自然语言理解，也**看不懂图片**（附图的离线回复会明确说明）；复杂需求请接入多模态大模型
+- 图片：单张 ≤ 16 MB、最长边 2048 px、每次最多 4 张；大图会转 JPEG（质量 88）；浏览器版的剪贴板读图不可用，请用拖拽
 - 暂不支持流式输出、草稿内联编辑（可“放弃”后重问）
-- 对话仅当前会话保留；只有 provider 设置会持久化
+- 对话仅当前会话保留；只有 provider 设置会持久化；待发送的图片不持久化
 - 其他语言（uk/de/es 等）的新文案暂时回退英文；中文已完整
 - 未做 CAD 语义校验以外的沙箱：草稿可能包含任意合法命令，应用前请审查
 

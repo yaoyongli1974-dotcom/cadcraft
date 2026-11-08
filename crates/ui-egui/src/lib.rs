@@ -242,6 +242,9 @@ pub struct Services {
     pub no_file_system: bool,
     /// Pick a `.pgp` alias file, starting in the folder given (the last import's).
     pub pick_pgp: Option<Box<dyn Fn(Option<&str>) -> Option<String>>>,
+    /// Pick a reference image (PNG, JPEG, BMP, TIFF) for the AI chat. Native builds only;
+    /// the web expects pastes and dropped files instead of a picker it cannot open.
+    pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {
@@ -905,18 +908,43 @@ impl CadApp {
     /// Input-derived work, once per layout frame.
     fn ui_input(&mut self, ctx: &egui::Context) {
         menus::shortcuts(self, ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.web_drops(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
             let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
-            for file in dropped {
-                let path = file.path();
-                if !path.as_os_str().is_empty() {
-                    self.open_path(path);
+            let paths: Vec<std::path::PathBuf> =
+                dropped.into_iter().map(|file| file.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect();
+            for path in paths {
+                // A dropped image with the AI palette open is a reference view for it,
+                // not a drawing to open; the usual behaviour is unchanged otherwise.
+                let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+                if crate::ai_chat::attached_image(self, &path, &ext).is_some() {
+                    continue;
                 }
+                self.open_path(&path);
             }
         }
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
+        }
+    }
+
+    /// Web drops carry the bytes, not a path the host can read: stage them with the
+    /// chat the same way the desktop stages a path.
+    #[cfg(target_arch = "wasm32")]
+    fn web_drops(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
+        for file in dropped {
+            if let Some(bytes) = &file.bytes
+                && crate::ai_chat::attached_bytes(self, &file.name, bytes).is_some()
+            {
+                continue;
+            }
+            let path = file.path();
+            if !path.as_os_str().is_empty() {
+                self.open_path(path);
+            }
         }
     }
 

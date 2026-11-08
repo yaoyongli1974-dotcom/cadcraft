@@ -553,7 +553,7 @@ mod openai_tests {
     fn request_body_keeps_the_key_out() {
         let settings = OpenAiSettings { api_key: String::from("sk-secret"), model: String::from("m"), ..Default::default() };
         let history = vec![ChatTurn { role: Role::User, text: String::from("hi") }, ChatTurn { role: Role::Assistant, text: String::from("hello") }];
-        let body = request_body(&settings, "DRAWING CONTEXT", &history, "draw a line");
+        let body = request_body(&settings, "DRAWING CONTEXT", &history, "draw a line", &[]);
         let text = serde_json::to_string(&body).expect("json");
         assert!(!text.contains("sk-secret"), "the API key never goes in the body");
         assert_eq!(body["response_format"]["type"], json!("json_object"));
@@ -590,5 +590,81 @@ mod offline_apply {
             assert!(report.errors.is_empty(), "{request}: {:?} in {:?}", report.errors, draft.script);
             assert!(report.applied >= 1, "{request}: {:?}", draft.script);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reference images: staging, request parts and the offline notice
+// ---------------------------------------------------------------------------
+
+mod images_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+        let image = image::DynamicImage::new_rgba8(width, height);
+        let mut out = Vec::new();
+        image.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).expect("encode png");
+        out
+    }
+
+    fn staged() -> crate::images::StagedImage {
+        crate::images::StagedImage { name: String::from("view.png"), mime: String::from("image/png"), data_b64: String::new(), width: 10, height: 10 }
+    }
+
+    #[test]
+    fn stages_a_small_png_as_is() {
+        let st = crate::images::stage_bytes("view.png", &png_bytes(8, 5)).expect("stage");
+        assert_eq!(st.mime, "image/png");
+        assert_eq!((st.width, st.height), (8, 5));
+        let bytes = base64::engine::general_purpose::STANDARD.decode(st.data_b64).expect("b64");
+        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "lossless png kept");
+    }
+
+    #[test]
+    fn non_images_are_refused_with_a_hint() {
+        let e = crate::images::stage_bytes("notes.txt", b"not an image").expect_err("refused");
+        assert!(e.contains("PNG, JPEG, BMP and TIFF"), "{e}");
+        let e = crate::images::stage_bytes("empty.png", &[]).expect_err("refused");
+        assert!(e.contains("empty"), "{e}");
+        assert!(crate::images::is_image_ext("JPG").is_some());
+        assert!(crate::images::is_image_ext("gif").is_none(), "formats match io::raster");
+    }
+
+    #[test]
+    fn oversized_sides_are_downscaled() {
+        let st = crate::images::stage_bytes("wide.png", &png_bytes(2400, 8)).expect("stage");
+        assert!(st.width <= crate::images::MAX_SIDE, "{}", st.width);
+        assert!(st.height >= 1, "{}", st.height);
+    }
+
+    #[test]
+    fn the_user_message_becomes_parts_only_with_images() {
+        let text = crate::images::user_content("以选中的为准", &[]);
+        assert_eq!(text, serde_json::json!("以选中的为准"));
+        let value = crate::images::user_content("以图为准", &[staged()]);
+        let parts = value.as_array().expect("parts");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], serde_json::json!({ "type": "text", "text": "以图为准" }));
+        let url = parts[1]["image_url"]["url"].as_str().expect("url");
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+    }
+
+    #[test]
+    fn offline_with_an_image_says_so_instead_of_failing() {
+        let settings = crate::provider::AiSettings::default();
+        let draft = crate::provider::generate(&settings, "", &[], "以 0,0 为圆心画半径 30 的圆", std::slice::from_ref(&staged())).expect("draft");
+        assert!(draft.reply.starts_with("The offline engine sees no pixels."), "{}", draft.reply);
+        assert_eq!(draft.script.trim(), "circle 0,0 30");
+    }
+
+    #[test]
+    fn the_image_cap_is_enforced() {
+        let settings = crate::provider::AiSettings::default();
+        let images: Vec<_> = (0..crate::images::MAX_IMAGES + 1).map(|_| staged()).collect();
+        let e = crate::provider::generate(&settings, "", &[], "画圆", &images).expect_err("capped");
+        assert!(e.contains("At most"), "{e}");
+        let e = crate::assistant::suggest(&mut Session::new(), &settings, &[], "画圆", &images).expect_err("capped");
+        assert!(e.contains("At most"), "{e}");
     }
 }

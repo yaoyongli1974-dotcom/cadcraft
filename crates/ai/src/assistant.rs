@@ -42,14 +42,31 @@ impl Draft {
 /// Maximum context entities the summary samples (the window needs text, not the whole DB).
 const CONTEXT_ENTITIES: usize = 80;
 
-/// Ask the configured provider: `history` may be empty; `user` is the new request.
+/// Ask the configured provider: `history` may be empty; `user` is the new request,
+/// `images` the reference views that ride it (up to [`crate::images::MAX_IMAGES`]).
 ///
 /// The returned draft is NOT executed - the UI shows it in the window first and
 /// the user applies it (`executor::apply`), so nothing can change the drawing
 /// behind the user's back.
-pub fn suggest(session: &mut Session, settings: &AiSettings, history: &[ChatTurn], user: &str) -> Result<Draft, String> {
-    let ctx = context(session);
-    crate::provider::generate(settings, &ctx, history, user)
+pub fn suggest(
+    session: &mut Session,
+    settings: &AiSettings,
+    history: &[ChatTurn],
+    user: &str,
+    images: &[crate::images::StagedImage],
+) -> Result<Draft, String> {
+    if images.len() > crate::images::MAX_IMAGES {
+        return Err(format!("At most {} images per ask; drop one and try again", crate::images::MAX_IMAGES));
+    }
+    let mut ctx = context(session);
+    if !images.is_empty() {
+        // The text summary carries no pixels: say what came attached so the model
+        // knows to read the image parts, and rules-driven demos behave the same.
+        let names: Vec<&str> = images.iter().map(|image| image.name.as_str()).collect();
+        let count = images.len();
+        ctx.push_str(&format!("user images ({count}): {}\n", names.join(", ")));
+    }
+    crate::provider::generate(settings, &ctx, history, user, images)
 }
 
 /// One-shot drawing summary for providers, in a compact line-oriented form.

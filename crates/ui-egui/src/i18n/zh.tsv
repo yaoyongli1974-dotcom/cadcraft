@@ -1497,3 +1497,9 @@ menu	View	视图
 	One undo (Ctrl+Z) reverts the whole applied draft	一次撤销（Ctrl+Z）即可还原整份已应用的草稿
 	The AI request ended without an answer	AI 请求已结束，但没有返回结果
 	Testing needs an OpenAI-compatible provider	测试需要 OpenAI 兼容提供商
+	References on the next ask	下一次提问将附带
+	Add image	添加图片
+	Paste image	粘贴图片
+	Add as image	作为图片添加
+	This build has no file dialog; drop or paste an image instead	此构建没有文件对话框；请拖拽或粘贴图片
+	📎 {n}	📎 {n}

@@ -87,6 +87,8 @@ pub const LAYOUT_VERSION: u32 = 2;
 pub const TOOL_SETS_WIDTH: f32 = 220.0;
 /// Width of the right dock's palettes column.
 pub const PALETTES_WIDTH: f32 = 300.0;
+/// Width of the AI chat's own column: wider than a palette so the conversation is readable.
+pub const AI_CHAT_WIDTH: f32 = 360.0;
 /// Layers' body height above Properties in a dock column.
 const LAYERS_HEIGHT: f32 = 280.0;
 
@@ -115,7 +117,11 @@ pub fn default_workspace() -> Workspace {
 
 /// The dock a panel belongs in: Tool Sets on the left, the palettes on the right.
 fn home_side(panel: Panel) -> (Side, f32) {
-    if panel == Panel::ToolSets { (Side::Start, TOOL_SETS_WIDTH) } else { (Side::End, PALETTES_WIDTH) }
+    match panel {
+        Panel::ToolSets => (Side::Start, TOOL_SETS_WIDTH),
+        Panel::AiChat => (Side::End, AI_CHAT_WIDTH),
+        _ => (Side::End, PALETTES_WIDTH),
+    }
 }
 
 /// The panels of every dock group on `side`: columns from the window edge inwards, groups from
@@ -171,6 +177,23 @@ fn home_anchor(layout: &Layout<Panel>, panel: Panel) -> Option<(Panel, bool)> {
 /// The actions that open a panel with no recorded place in its dock: a new group beside its
 /// docked neighbour, else a new dock on its side at its default width.
 fn home(layout: &Layout<Panel>, panel: Panel) -> Vec<Action<Panel>> {
+    // The AI chat always opens as its own full-height column in the right dock: the
+    // conversation needs the window height, and tabs would bury it between palettes. A side
+    // may hold one dock, so this is a new column beside the palettes', not a new dock.
+    if panel == Panel::AiChat {
+        let anchor = [Panel::Layers, Panel::Properties, Panel::ExternalRefs, Panel::QuickCalc].into_iter().find(|p| docked(layout, *p));
+        let (_, width) = home_side(panel);
+        return match anchor {
+            Some(anchor) => {
+                vec![Action::OpenAt { panel, anchor, placement: Placement::Column { after: false } }, Action::ResizeColumn { panel, width }]
+            }
+            None => vec![
+                Action::Open { panel, anchor: None },
+                Action::MovePanel { panel, to: Target::NewDock { side: Side::End } },
+                Action::ResizeColumn { panel, width },
+            ],
+        };
+    }
     if let Some((anchor, below)) = home_anchor(layout, panel) {
         return vec![Action::OpenAt { panel, anchor, placement: Placement::Group { below, height: None } }];
     }
@@ -447,7 +470,8 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Canvas => (egui::vec2(300.0, 180.0), 1_000_000.0),
         Panel::QuickCalc => (egui::vec2(240.0, 160.0), 600.0),
         Panel::ToolSets => (egui::vec2(220.0, 150.0), 480.0),
-        Panel::Layers | Panel::Properties | Panel::ExternalRefs | Panel::AiChat => (egui::vec2(260.0, 100.0), 720.0),
+        Panel::Layers | Panel::Properties | Panel::ExternalRefs => (egui::vec2(220.0, 100.0), 720.0),
+        Panel::AiChat => (egui::vec2(300.0, 100.0), 720.0),
     };
     PanelLimits { min, max: egui::vec2(max_width, 1_000_000.0) }
 }

@@ -15,8 +15,10 @@ drawing behind your back — it drafts, you apply.
 
 | Piece | Where | What it does |
 | --- | --- | --- |
-| `cadcraft-ai` crate (layer 4, `engine -> ai`) | `crates/ai/` | Drawing-context snapshot, provider dispatch, offline rule engine, OpenAI-compatible client, draft application as one undo group |
-| AI chat palette | `crates/ui-egui/src/ai_chat.rs` | Window ▸ AI Chat: conversation, draft preview per command line, Apply / Discard, provider settings |
+| `cadcraft-ai` crate (layer 4, `engine -> ai`) | `crates/ai/` | Drawing-context snapshot, provider dispatch, offline rule engine, OpenAI-compatible client (text and images), draft application as one undo group |
+| AI chat palette | `crates/ui-egui/src/ai_chat.rs` | Window ▸ AI Chat: conversation, draft preview per command line, Apply / Discard, provider settings, image references |
+| Image references | `crates/ai/src/images.rs` + the palette | Drop, paste, file dialog or a typed path; PNG/JPEG/BMP/TIFF up to 16 MB and 2048 px, four per ask, sent as `image_url` data URLs |
+| Full-height panel | `crates/ui-egui/src/docking.rs` | The palette gets its own full-height column at the right edge (360 px) instead of sharing a stacked column |
 | Preferences | `UiState` + `prefs_json`/`load_prefs` | Provider, base URL, model and temperature persist; **the API key never does** |
 | i18n | `crates/ui-egui/src/i18n/zh.tsv` | Chinese translations for the new UI text |
 | Layering | `xtask/src/layers.rs` | `ai` is registered at L4 with the `engine -> ai` intra-layer order |
@@ -49,6 +51,15 @@ per turn, with a 120 s budget. The model is asked for a single JSON object
 `{"reply": "...", "script": "..."}`; a fenced code block is accepted as a fallback. The
 whole draft is previewed before it can run.
 
+**Images.** Attach a screenshot or sketch to the next ask by dropping it on the window,
+pasting from the clipboard (native), choosing it with **Add image**, or typing its path
+and pressing **Add as image**. Up to four images per ask; files are recognised by content
+(PNG, JPEG, BMP, TIFF), capped at 16 MB and 2048 px on the long side (larger ones are
+scaled down), and sent as `image_url` data URLs in the last user message. Asks without
+images build byte-identical request bodies to the text-only version. The offline engine
+has no vision: with images attached its reply starts with
+`The offline engine sees no pixels.` and still applies the text rules.
+
 ## Build and run
 
 Rust 1.95 or newer (edition 2024).
@@ -77,7 +88,11 @@ works in the browser build.
 - Commands that need an interactive sequence can still be drafted as multi-line prompt
   answers; the offline engine deliberately refuses them rather than guessing.
 - The panel's conversation is per session and is not written to disk; only provider
-  settings persist.
+  settings persist, and staged images are dropped when the ask is sent or the app closes.
+- Images are capped at four per ask, 16 MB and 2048 px each; the browser build cannot read
+  clipboard images (drop or pick a file instead).
+- The offline engine sees no pixels; image understanding needs a multimodal OpenAI-compatible
+  model.
 
 - **No upstream self-update.** The startup update check is off: installing the upstream
   CADCraft release would replace this build with one that has no AI window. Help ▸

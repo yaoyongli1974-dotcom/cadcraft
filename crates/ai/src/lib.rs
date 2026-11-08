@@ -16,6 +16,7 @@
 
 pub mod assistant;
 pub mod executor;
+pub mod images;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod openai;
 pub mod provider;
@@ -26,4 +27,5 @@ mod tests;
 
 pub use assistant::{ChatTurn, Draft, Role, context, suggest};
 pub use executor::{LineKind, LineReport, active_lines, apply, dry_run};
+pub use images::{MAX_IMAGES, MAX_RAW_BYTES, MAX_SIDE, StagedImage, is_image_ext, stage_bytes, stage_file, user_content};
 pub use provider::{AiMode, AiSettings, OpenAiSettings};
