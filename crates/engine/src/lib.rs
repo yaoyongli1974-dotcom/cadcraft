@@ -69,7 +69,7 @@ pub use view::{ModelTile, ModelTiles, View};
 
 /// The derivative's own version. Upstream releases change [`build_version`]; AICAD releases
 /// change this one, so both numbers stay visible and independently meaningful.
-pub const AICAD_VERSION: &str = "0.0.3";
+pub const AICAD_VERSION: &str = "0.0.4";
 
 /// `AICAD <derivative> (CADCraft <upstream>)`, what the app, its about window and `--version`
 /// say: the derivative version first, the upstream version it is based on in parentheses.
