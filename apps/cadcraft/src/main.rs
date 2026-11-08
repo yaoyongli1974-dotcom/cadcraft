@@ -196,6 +196,13 @@ fn services() -> Services {
                 .pick_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_document: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter(i18n::t("Documents (PDF, DOCX, MD, TXT)"), &["pdf", "docx", "md", "markdown", "txt", "text", "log", "csv"])
+                .add_filter(i18n::t("All files"), &["*"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
     }
 }
 

@@ -131,10 +131,13 @@ pub fn stage_file(path: &std::path::Path) -> Result<StagedImage, String> {
 /// shape every provider has always accepted), or an array of parts with the images
 /// as data URLs after the text. Images ride only the newest turn; history turns hold
 /// their text alone so a long conversation cannot balloon request tokens.
-pub fn user_content(text: &str, images: &[StagedImage]) -> serde_json::Value {
+pub fn user_content(text: &str, images: &[StagedImage], documents: &[crate::documents::StagedDocument]) -> serde_json::Value {
     use serde_json::json;
+    // Reference documents travel as text ahead of the question; without documents
+    // (or images) the value stays the plain string older endpoints already accept.
+    let text = if documents.is_empty() { text.to_owned() } else { format!("{}\n{text}", crate::documents::documents_block(documents)) };
     if images.is_empty() {
-        return serde_json::Value::String(text.to_string());
+        return serde_json::Value::String(text);
     }
     let mut parts = vec![json!({ "type": "text", "text": text })];
     parts.extend(images.iter().map(|image| {

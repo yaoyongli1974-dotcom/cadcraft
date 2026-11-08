@@ -18,6 +18,7 @@ drawing behind your back — it drafts, you apply.
 | `cadcraft-ai` crate (layer 4, `engine -> ai`) | `crates/ai/` | Drawing-context snapshot, provider dispatch, offline rule engine, OpenAI-compatible client (text and images), draft application as one undo group |
 | AI chat palette | `crates/ui-egui/src/ai_chat.rs` | Window ▸ AI Chat: conversation, draft preview per command line, Apply / Discard, provider settings, image references |
 | Image references | `crates/ai/src/images.rs` + the palette | Drop, paste, file dialog or a typed path; PNG/JPEG/BMP/TIFF up to 16 MB and 2048 px, four per ask, sent as `image_url` data URLs |
+| Document references | `crates/io/src/documents.rs` + `crates/ai/src/documents.rs` | Drop, pick or type a path; PDF text layer, DOCX and UTF-8 text, three per ask, bounded characters, sent as a labelled text block |
 | Full-height panel | `crates/ui-egui/src/docking.rs` | The palette gets its own full-height column at the right edge (360 px) instead of sharing a stacked column |
 | Preferences | `UiState` + `prefs_json`/`load_prefs` | Provider, base URL, model and temperature persist; **the API key never does** |
 | i18n | `crates/ui-egui/src/i18n/zh.tsv` | Chinese translations for the new UI text |
@@ -60,6 +61,14 @@ images build byte-identical request bodies to the text-only version. The offline
 has no vision: with images attached its reply starts with
 `The offline engine sees no pixels.` and still applies the text rules.
 
+**Documents.** PDF, DOCX, Markdown and plain text can ride the same ask: drop the file,
+pick **Add document**, or type its path and press **Add as document**. Text is extracted
+locally (PDF from its text layer, DOCX from `word/document.xml`, text as UTF-8), capped at
+three documents, 10 MB each, 30,000 characters per document and 60,000 in total, and sent
+as a `REFERENCE DOCUMENTS` block ahead of the question. Asks without documents and images
+keep the byte-identical request body. The offline engine cannot read them: its reply starts
+with `The offline engine cannot read documents.` and still applies the text rules.
+
 ## Build and run
 
 Rust 1.95 or newer (edition 2024).
@@ -93,6 +102,8 @@ works in the browser build.
   clipboard images (drop or pick a file instead).
 - The offline engine sees no pixels; image understanding needs a multimodal OpenAI-compatible
   model.
+- Scanned PDFs have no text layer and are refused with a message; run OCR first.
+- DOCX extraction reads the body only: comments, headers and footers are skipped.
 
 - **No upstream self-update.** The startup update check is off: installing the upstream
   CADCraft release would replace this build with one that has no AI window. Help ▸

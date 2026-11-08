@@ -48,6 +48,9 @@ pub struct AiChatState {
     /// Reference images staged from the file dialog, a typed path, a paste or a drop;
     /// they clear when the next ask is sent.
     pub pending: Vec<PendingImage>,
+    /// Reference documents (PDF, DOCX, text) staged for the next ask; like images they
+    /// clear when the ask is sent.
+    pub pending_docs: Vec<cadcraft_ai::StagedDocument>,
     /// The running request's answer channel, shared with clones of this state.
     pending_request: Option<Arc<Mutex<Receiver<Result<Draft, String>>>>>,
 }
@@ -134,7 +137,13 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.separator();
     // Leave the input row and the attachment tray their room, so staging an image never
     // pushes the ask field out of the palette (or the command line steals the typing).
-    let reserved = if state.pending.is_empty() { 72.0 } else { 182.0 };
+    let reserved = if !state.pending.is_empty() {
+        182.0
+    } else if !state.pending_docs.is_empty() {
+        128.0
+    } else {
+        72.0
+    };
     messages_section(app, &mut state, ui, &ctx, reserved);
     input_section(app, &mut state, ui, &ctx);
     attachments_section(&mut state, ui, &ctx);
@@ -286,37 +295,61 @@ fn apply(app: &mut CadApp, state: &mut AiChatState, index: usize) {
     }
 }
 
-/// The staged reference images, their thumbnails and the removals.
+/// The staged reference documents and images, with their removals.
 fn attachments_section(state: &mut AiChatState, ui: &mut egui::Ui, ctx: &egui::Context) {
-    if state.pending.is_empty() {
+    if state.pending.is_empty() && state.pending_docs.is_empty() {
         return;
     }
     let t = Tokens::get();
     ui.add_space(2.0);
-    let mut removed = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(crate::tl!("References on the next ask")).small().color(t.text_faint));
         if ui.button(crate::tl!("Clear")).clicked() {
             state.pending.clear();
+            state.pending_docs.clear();
         }
     });
-    let thumbs: Vec<(usize, egui::TextureHandle)> =
-        state.pending.iter_mut().enumerate().map(|(index, pending)| (index, thumbnail(ctx, pending))).collect();
-    egui::ScrollArea::horizontal().id_salt("ai-chat-thumbs").auto_shrink([false, true]).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            for (index, tex) in thumbs {
-                let size = thumb_size(tex.size_vec2(), 72.0);
-                ui.vertical(|ui| {
-                    ui.add(egui::Image::new(&tex).fit_to_exact_size(size).corner_radius(2.0));
-                    if ui.button(RichText::new(crate::tl!("Remove")).small()).clicked() {
-                        removed = Some(index);
-                    }
-                });
-            }
+    if !state.pending_docs.is_empty() {
+        let mut removed = None;
+        egui::ScrollArea::horizontal().id_salt("ai-chat-docs").auto_shrink([false, true]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (index, doc) in state.pending_docs.iter().enumerate() {
+                    ui.group(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&doc.name).small().color(t.text));
+                            ui.label(RichText::new(format!("{} · {}", doc.kind, crate::tf!("{n} chars", n = doc.chars))).small().color(t.text_dim));
+                            if ui.button(RichText::new(crate::tl!("Remove")).small()).clicked() {
+                                removed = Some(index);
+                            }
+                        });
+                    });
+                }
+            });
         });
-    });
-    if let Some(index) = removed {
-        state.pending.remove(index);
+        if let Some(index) = removed {
+            state.pending_docs.remove(index);
+        }
+    }
+    if !state.pending.is_empty() {
+        let mut removed = None;
+        let thumbs: Vec<(usize, egui::TextureHandle)> =
+            state.pending.iter_mut().enumerate().map(|(index, pending)| (index, thumbnail(ctx, pending))).collect();
+        egui::ScrollArea::horizontal().id_salt("ai-chat-thumbs").auto_shrink([false, true]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (index, tex) in thumbs {
+                    let size = thumb_size(tex.size_vec2(), 72.0);
+                    ui.vertical(|ui| {
+                        ui.add(egui::Image::new(&tex).fit_to_exact_size(size).corner_radius(2.0));
+                        if ui.button(RichText::new(crate::tl!("Remove")).small()).clicked() {
+                            removed = Some(index);
+                        }
+                    });
+                }
+            });
+        });
+        if let Some(index) = removed {
+            state.pending.remove(index);
+        }
     }
 }
 
@@ -391,6 +424,23 @@ fn input_section(app: &mut CadApp, state: &mut AiChatState, ui: &mut egui::Ui, c
         if paste.clicked() {
             paste_image(state);
         }
+        let picker = app.services.pick_document.is_some();
+        let add_doc = ui.add_enabled(picker, egui::Button::new(crate::tl!("Add document")).small());
+        let add_doc =
+            if picker { add_doc } else { add_doc.on_disabled_hover_text(crate::tl!("This build has no file dialog; drop a document instead")) };
+        crate::control::record_widget(ui, &add_doc, "Add document", "button", None);
+        if add_doc.clicked() {
+            add_document_from_picker(app, state);
+        }
+        if let Some(path) = typed_document_path(&state.input) {
+            let add = ui.button(RichText::new(crate::tl!("Add as document")).small());
+            crate::control::record_widget(ui, &add, "Add as document", "button", None);
+            if add.clicked() {
+                stage_document(state, cadcraft_ai::StagedDocument::stage_file(&path));
+                state.input.clear();
+                ctx.request_repaint();
+            }
+        }
         if let Some(path) = typed_image_path(&state.input) {
             let add = ui.button(RichText::new(crate::tl!("Add as image")).small());
             crate::control::record_widget(ui, &add, "Add as image", "button", None);
@@ -417,6 +467,37 @@ fn typed_image_path(input: &str) -> Option<std::path::PathBuf> {
     let ext = path.extension()?.to_string_lossy().to_string();
     cadcraft_ai::is_image_ext(&ext)?;
     path.is_file().then_some(path)
+}
+
+/// A bare typed path that is an existing document file.
+fn typed_document_path(input: &str) -> Option<std::path::PathBuf> {
+    let word = input.trim();
+    if !(word.contains('/') || word.contains('\\') || word.contains(':')) {
+        return None;
+    }
+    let path = std::path::PathBuf::from(word);
+    let ext = path.extension()?.to_string_lossy().to_string();
+    cadcraft_ai::is_document_ext(&ext).then_some(path).filter(|path| path.is_file())
+}
+
+/// Stage whatever the host's document picker returns; a cancelled picker stays quiet.
+fn add_document_from_picker(app: &mut CadApp, state: &mut AiChatState) {
+    let Some(path) = app.services.pick_document.as_ref().and_then(|pick| pick()) else { return };
+    stage_document(state, cadcraft_ai::StagedDocument::stage_file(std::path::Path::new(&path)));
+}
+
+/// A staged document arrives from a picker, a drop or a typed path.
+fn stage_document(state: &mut AiChatState, staged: Result<cadcraft_ai::StagedDocument, String>) {
+    match staged {
+        Ok(doc) => {
+            if state.pending_docs.len() >= cadcraft_ai::MAX_DOCUMENTS {
+                state.messages.push(AiMessage::error(format!("At most {} documents per ask; remove one first", cadcraft_ai::MAX_DOCUMENTS)));
+            } else {
+                state.pending_docs.push(doc);
+            }
+        }
+        Err(e) => state.messages.push(AiMessage::error(e)),
+    }
 }
 
 /// Stage whatever the host's image picker returns; a cancelled picker stays quiet.
@@ -481,12 +562,20 @@ fn stage(state: &mut AiChatState, staged: Result<cadcraft_ai::StagedImage, Strin
 /// skip `open_path`.
 pub fn attached_image(app: &mut CadApp, path: &std::path::Path, ext: &str) -> Option<()> {
     let panel_open = app.ui.docking.layout.contains(&crate::docking::Panel::AiChat);
-    if !panel_open || cadcraft_ai::is_image_ext(ext).is_none() {
+    if !panel_open {
         return None;
     }
-    let staged = cadcraft_ai::stage_file(path);
-    stage(&mut app.ui.ai_chat, staged);
-    Some(())
+    if cadcraft_ai::is_image_ext(ext).is_some() {
+        let staged = cadcraft_ai::stage_file(path);
+        stage(&mut app.ui.ai_chat, staged);
+        return Some(());
+    }
+    if cadcraft_ai::is_document_ext(ext) {
+        let staged = cadcraft_ai::StagedDocument::stage_file(path);
+        stage_document(&mut app.ui.ai_chat, staged);
+        return Some(());
+    }
+    None
 }
 
 /// Same for a web drop, where the bytes ride the event itself.
@@ -495,8 +584,22 @@ pub fn attached_bytes(app: &mut CadApp, name: &str, bytes: &[u8]) -> Option<()> 
     if !panel_open {
         return None;
     }
-    stage(&mut app.ui.ai_chat, cadcraft_ai::stage_bytes(name, bytes));
-    Some(())
+    match cadcraft_ai::stage_bytes(name, bytes) {
+        Ok(image) => {
+            stage(&mut app.ui.ai_chat, Ok(image));
+            Some(())
+        }
+        Err(_) => {
+            // A web drop carries the bytes; a document is recognised by content there.
+            match cadcraft_ai::StagedDocument::stage(name, bytes) {
+                Ok(doc) => {
+                    stage_document(&mut app.ui.ai_chat, Ok(doc));
+                    Some(())
+                }
+                Err(_) => None,
+            }
+        }
+    }
 }
 
 /// Ask the provider on a worker thread, over a detached copy of the open drawings.
@@ -508,7 +611,8 @@ fn request(session: &Session, state: &mut AiChatState, ctx: &egui::Context, user
     // The staged images ride this turn only: staged text ("📎 n") is display-only,
     // history keeps the typed line for the provider's memory window.
     let images: Vec<StagedImage> = state.pending.drain(..).map(|pending| pending.image).collect();
-    let attachments = images.len();
+    let docs: Vec<cadcraft_ai::StagedDocument> = std::mem::take(&mut state.pending_docs);
+    let attachments = images.len() + docs.len();
     state.busy = true;
     if echo {
         state.input.clear();
@@ -522,7 +626,7 @@ fn request(session: &Session, state: &mut AiChatState, ctx: &egui::Context, user
     state.pending_request = Some(Arc::new(Mutex::new(rx)));
     let ctx = ctx.clone();
     let work = move || {
-        let result = cadcraft_ai::suggest(&mut detached, &settings, &history, &text, &images);
+        let result = cadcraft_ai::suggest(&mut detached, &settings, &history, &text, &images, &docs);
         let _ = tx.send(result);
         ctx.request_repaint();
     };
@@ -761,6 +865,51 @@ mod tests {
         let bogus = std::env::temp_dir().join("aicad-missing-9e21.png");
         let _ = std::fs::remove_file(&bogus);
         assert_eq!(typed_image_path(bogus.to_string_lossy().as_ref()), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn a_test_document_on_disk() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("aicad-ai-chat-docs");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("spec.md");
+        std::fs::write(&path, "# Spec\n\nWall height 2400 mm.").expect("the sample is written");
+        path
+    }
+
+    #[test]
+    fn staged_documents_respect_the_per_ask_cap() {
+        let mut state = AiChatState::default();
+        for n in 0..cadcraft_ai::MAX_DOCUMENTS {
+            let docs = cadcraft_ai::StagedDocument::stage(&format!("{n}.txt"), b"a wall");
+            stage_document(&mut state, docs);
+        }
+        assert_eq!(state.pending_docs.len(), cadcraft_ai::MAX_DOCUMENTS);
+        stage_document(&mut state, cadcraft_ai::StagedDocument::stage("extra.txt", b"a door"));
+        assert_eq!(state.pending_docs.len(), cadcraft_ai::MAX_DOCUMENTS, "the extra document is refused");
+        assert!(state.messages.last().is_some_and(|message| message.error));
+    }
+
+    #[test]
+    fn a_dropped_document_reaches_the_chat_as_a_document() {
+        let path = a_test_document_on_disk();
+        let mut app = CadApp::new(Session::new(), Services::default());
+        assert_eq!(crate::ai_chat::attached_image(&mut app, &path, "md"), None, "closed palette: the drop opens nothing here");
+        toggle(&mut app).expect("the palette opens");
+        assert_eq!(crate::ai_chat::attached_image(&mut app, &path, "md"), Some(()));
+        assert_eq!(app.ui.ai_chat.pending_docs.len(), 1);
+        assert!(app.ui.ai_chat.pending.is_empty());
+        assert!(app.ui.ai_chat.pending_docs[0].text.contains("2400"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_typed_path_shortcut_accepts_only_existing_documents() {
+        let path = a_test_document_on_disk();
+        assert_eq!(typed_document_path("draw a wall"), None);
+        assert_eq!(typed_document_path(path.to_string_lossy().as_ref()), Some(path.clone()));
+        let bogus = std::env::temp_dir().join("aicad-missing-77ab.pdf");
+        let _ = std::fs::remove_file(&bogus);
+        assert_eq!(typed_document_path(bogus.to_string_lossy().as_ref()), None);
         let _ = std::fs::remove_file(&path);
     }
 }

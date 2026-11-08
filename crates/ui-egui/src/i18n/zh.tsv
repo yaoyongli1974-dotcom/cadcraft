@@ -1503,3 +1503,8 @@ menu	View	视图
 	Add as image	作为图片添加
 	This build has no file dialog; drop or paste an image instead	此构建没有文件对话框；请拖拽或粘贴图片
 	📎 {n}	📎 {n}
+	Add document	添加文档
+	Add as document	作为文档添加
+	Documents (PDF, DOCX, MD, TXT)	文档（PDF、DOCX、MD、TXT）
+	This build has no file dialog; drop a document instead	此构建没有文件对话框；请拖拽文档
+	{n} chars	{n} 字符

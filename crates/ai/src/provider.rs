@@ -71,21 +71,36 @@ impl AiSettings {
 /// Produce a draft for `user` given conversation history, a drawing context block and
 /// optional reference images (carried on the newest turn only; the offline rule
 /// engine sees none and answers with a mention instead).
-pub fn generate(settings: &AiSettings, context: &str, history: &[ChatTurn], user: &str, images: &[StagedImage]) -> Result<Draft, String> {
+pub fn generate(
+    settings: &AiSettings,
+    context: &str,
+    history: &[ChatTurn],
+    user: &str,
+    images: &[StagedImage],
+    documents: &[crate::documents::StagedDocument],
+) -> Result<Draft, String> {
     if images.len() > crate::images::MAX_IMAGES {
         return Err(format!("At most {} images per ask; drop one and try again", crate::images::MAX_IMAGES));
     }
+    crate::documents::check_count(documents)?;
     // The wasm build has no HTTP provider, so the history is only read natively.
     #[cfg(target_arch = "wasm32")]
     let _ = history;
     settings.usable()?;
     match settings.mode {
         AiMode::Offline => {
-            if images.is_empty() {
+            if images.is_empty() && documents.is_empty() {
                 crate::rules::offline_draft(user, context)
             } else {
                 let mut draft = crate::rules::offline_draft(user, context)?;
-                draft.reply.insert_str(0, "The offline engine sees no pixels. ");
+                let mut prefix = String::new();
+                if !images.is_empty() {
+                    prefix.push_str("The offline engine sees no pixels. ");
+                }
+                if !documents.is_empty() {
+                    prefix.push_str("The offline engine cannot read documents. ");
+                }
+                draft.reply.insert_str(0, &prefix);
                 Ok(draft)
             }
         }
@@ -95,7 +110,7 @@ pub fn generate(settings: &AiSettings, context: &str, history: &[ChatTurn], user
                 Err(String::from("OpenAI provider is unavailable on wasm; the offline rule engine still works"))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            crate::openai::chat(&settings.openai, context, history, user, images)
+            crate::openai::chat(&settings.openai, context, history, user, images, documents)
         }
     }
 }

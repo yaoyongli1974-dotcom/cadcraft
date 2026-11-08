@@ -553,7 +553,7 @@ mod openai_tests {
     fn request_body_keeps_the_key_out() {
         let settings = OpenAiSettings { api_key: String::from("sk-secret"), model: String::from("m"), ..Default::default() };
         let history = vec![ChatTurn { role: Role::User, text: String::from("hi") }, ChatTurn { role: Role::Assistant, text: String::from("hello") }];
-        let body = request_body(&settings, "DRAWING CONTEXT", &history, "draw a line", &[]);
+        let body = request_body(&settings, "DRAWING CONTEXT", &history, "draw a line", &[], &[]);
         let text = serde_json::to_string(&body).expect("json");
         assert!(!text.contains("sk-secret"), "the API key never goes in the body");
         assert_eq!(body["response_format"]["type"], json!("json_object"));
@@ -640,9 +640,9 @@ mod images_tests {
 
     #[test]
     fn the_user_message_becomes_parts_only_with_images() {
-        let text = crate::images::user_content("以选中的为准", &[]);
+        let text = crate::images::user_content("以选中的为准", &[], &[]);
         assert_eq!(text, serde_json::json!("以选中的为准"));
-        let value = crate::images::user_content("以图为准", &[staged()]);
+        let value = crate::images::user_content("以图为准", &[staged()], &[]);
         let parts = value.as_array().expect("parts");
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], serde_json::json!({ "type": "text", "text": "以图为准" }));
@@ -653,7 +653,8 @@ mod images_tests {
     #[test]
     fn offline_with_an_image_says_so_instead_of_failing() {
         let settings = crate::provider::AiSettings::default();
-        let draft = crate::provider::generate(&settings, "", &[], "以 0,0 为圆心画半径 30 的圆", std::slice::from_ref(&staged())).expect("draft");
+        let draft =
+            crate::provider::generate(&settings, "", &[], "以 0,0 为圆心画半径 30 的圆", std::slice::from_ref(&staged()), &[]).expect("draft");
         assert!(draft.reply.starts_with("The offline engine sees no pixels."), "{}", draft.reply);
         assert_eq!(draft.script.trim(), "circle 0,0 30");
     }
@@ -662,9 +663,55 @@ mod images_tests {
     fn the_image_cap_is_enforced() {
         let settings = crate::provider::AiSettings::default();
         let images: Vec<_> = (0..crate::images::MAX_IMAGES + 1).map(|_| staged()).collect();
-        let e = crate::provider::generate(&settings, "", &[], "画圆", &images).expect_err("capped");
+        let e = crate::provider::generate(&settings, "", &[], "画圆", &images, &[]).expect_err("capped");
         assert!(e.contains("At most"), "{e}");
-        let e = crate::assistant::suggest(&mut Session::new(), &settings, &[], "画圆", &images).expect_err("capped");
+        let e = crate::assistant::suggest(&mut Session::new(), &settings, &[], "画圆", &images, &[]).expect_err("capped");
         assert!(e.contains("At most"), "{e}");
+    }
+}
+
+/// Reference documents: staging, the block that rides the question, and the offline reply.
+mod document_tests {
+    use crate::documents::{MAX_DOCUMENTS, StagedDocument};
+    use crate::images::StagedImage;
+    use crate::provider::AiSettings;
+
+    fn doc(name: &str, text: &str) -> StagedDocument {
+        StagedDocument::stage(name, text.as_bytes()).expect("stage")
+    }
+
+    #[test]
+    fn a_document_is_text_ahead_of_the_question() {
+        let value = crate::images::user_content("画一面墙", &[], &[doc("spec.md", "Wall height 2400 mm")]);
+        let text = value.as_str().expect("plain text content");
+        assert!(text.starts_with("REFERENCE DOCUMENTS\n<document name=\"spec.md\" kind=\"text\">"), "{text}");
+        assert!(text.contains("Wall height 2400 mm"));
+        assert!(text.ends_with("画一面墙"));
+    }
+
+    #[test]
+    fn documents_and_images_share_the_content_parts() {
+        let image = StagedImage { name: String::from("view"), mime: String::from("image/png"), data_b64: String::from("AAAA"), width: 1, height: 1 };
+        let value = crate::images::user_content("看这两份", &[image], &[doc("a.txt", "first")]);
+        let parts = value.as_array().expect("parts");
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0]["text"].as_str().is_some_and(|t| t.contains("first") && t.ends_with("看这两份")));
+        assert_eq!(parts[1]["type"], serde_json::json!("image_url"));
+    }
+
+    #[test]
+    fn offline_asks_with_documents_say_they_cannot_read_them() {
+        let settings = AiSettings::default();
+        let draft = crate::provider::generate(&settings, "", &[], "以 0,0 为圆心画半径 5 的圆", &[], &[doc("a.txt", "notes")]).expect("draft");
+        assert!(draft.reply.starts_with("The offline engine cannot read documents."), "{}", draft.reply);
+        assert!(draft.script.contains("circle"), "{}", draft.script);
+    }
+
+    #[test]
+    fn too_many_documents_are_refused_before_the_provider() {
+        let settings = AiSettings::default();
+        let docs: Vec<_> = (0..=MAX_DOCUMENTS).map(|i| doc(&format!("{i}.txt"), "text")).collect();
+        let err = crate::provider::generate(&settings, "", &[], "画圆", &[], &docs).expect_err("capped");
+        assert!(err.contains("documents"), "{err}");
     }
 }

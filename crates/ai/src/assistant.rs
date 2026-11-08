@@ -54,10 +54,12 @@ pub fn suggest(
     history: &[ChatTurn],
     user: &str,
     images: &[crate::images::StagedImage],
+    documents: &[crate::documents::StagedDocument],
 ) -> Result<Draft, String> {
     if images.len() > crate::images::MAX_IMAGES {
         return Err(format!("At most {} images per ask; drop one and try again", crate::images::MAX_IMAGES));
     }
+    crate::documents::check_count(documents)?;
     let mut ctx = context(session);
     if !images.is_empty() {
         // The text summary carries no pixels: say what came attached so the model
@@ -66,7 +68,12 @@ pub fn suggest(
         let count = images.len();
         ctx.push_str(&format!("user images ({count}): {}\n", names.join(", ")));
     }
-    crate::provider::generate(settings, &ctx, history, user, images)
+    if !documents.is_empty() {
+        let names: Vec<&str> = documents.iter().map(|doc| doc.name.as_str()).collect();
+        let count = documents.len();
+        ctx.push_str(&format!("user documents ({count}): {}\n", names.join(", ")));
+    }
+    crate::provider::generate(settings, &ctx, history, user, images, documents)
 }
 
 /// One-shot drawing summary for providers, in a compact line-oriented form.

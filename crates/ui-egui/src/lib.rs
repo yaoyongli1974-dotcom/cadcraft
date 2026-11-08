@@ -245,6 +245,8 @@ pub struct Services {
     /// Pick a reference image (PNG, JPEG, BMP, TIFF) for the AI chat. Native builds only;
     /// the web expects pastes and dropped files instead of a picker it cannot open.
     pub pick_image: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Pick a reference document (PDF, DOCX, Markdown, text) for the AI chat.
+    pub pick_document: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 pub struct CadApp {

@@ -11,6 +11,8 @@ workspace = true
 
 [dependencies]
 cadcraft-engine = { workspace = true }
+# Extracts text from reference documents (PDF, DOCX, UTF-8 text).
+cadcraft-io = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

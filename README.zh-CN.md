@@ -36,6 +36,7 @@ circle 0,0 30
 | 密钥安全 | API Key 只来自环境变量或当前会话输入，**绝不写入偏好文件** |
 | 中文界面 | 新增文案全部有中文翻译；菜单/面板/提示一致 |
 | 图片参考 | 把截图/草图附在提问里（拖拽、粘贴、文件选择或输入路径），最多 4 张，随消息发给多模态模型 |
+| 文档参考 | 把 PDF、Word（DOCX）、Markdown、纯文本附在提问里，自动抽取文字，最多 3 份 |
 | 更大的对话窗口 | AI 助手独占右边缘一整列（默认 360px、全高），消息区可滚动，输入区常驻 |
 | wasm 兼容 | AI crate 可在 `wasm32-unknown-unknown` 编译；浏览器版使用离线引擎 |
 
@@ -110,6 +111,29 @@ export AICAD_AI_API_KEY=sk-...
 
 图片只在当前提问中发送，不会写入图纸、偏好或日志。
 
+### 3.4 文档参考
+
+让模型读规格书、需求文档或会议记录：
+
+| 输入方式 | 说明 |
+| --- | --- |
+| 拖拽 | 把 `.pdf` / `.docx` / `.md` / `.txt` 拖进窗口，AI 助手面板打开时自动加入 |
+| 文件选择 | 点 **添加文档** |
+| 路径 | 在输入框输入或粘贴文档路径，点出现的 **作为文档添加** |
+
+处理方式：
+
+- 格式：PDF（读取文字层）、DOCX（`word/document.xml`）、Markdown 与 UTF-8 文本（txt/log/csv）
+- 大小：单份 ≤ 10 MB；每次最多 3 份
+- 长度：每份最多 3 万字符，合计 6 万字符，超出部分截断并在标签标注
+- 发送：抽取的文字放在问题前的 `REFERENCE DOCUMENTS` 块中（每份一个 `<document name=…>`），
+  与图片可同时使用；不额外调用接口
+- 兼容：不带文档时请求体与旧版完全一致；文档不写入图纸、偏好或日志
+- 离线模式没有文档理解：回复以 `The offline engine cannot read documents.` 开头，
+  再按文字规则处理（若同时有图片，两个提示都会出现）
+- 扫描版 PDF 没有文字层时会提示无法抽取，请先 OCR
+
+
 ## 4. 工作原理
 
 ```
@@ -140,7 +164,8 @@ UNDO begin → 逐行 Session::cmdline（等同手敲） → UNDO end
 
 | 路径 | 内容 |
 | --- | --- |
-| `crates/ai/` | 新增 AI crate：`assistant`、`provider`、`openai`、`rules`、`executor`、`images`、`prompts/system.md` |
+| `crates/ai/` | 新增 AI crate：`assistant`、`provider`、`openai`、`rules`、`executor`、`images`、`documents`、`prompts/system.md` |
+| `crates/io/src/documents.rs` | PDF / DOCX / 文本抽取（PDF 文字层、DOCX 段落与制表符） |
 | `crates/ui-egui/src/ai_chat.rs` | AI 助手面板（会话、草稿、设置、图片缩略图、后台请求） |
 | `crates/ui-egui/src/docking.rs` | `Panel::AiChat` 面板注册；独占右边缘全高列（`AI_CHAT_WIDTH = 360`） |
 | `crates/ui-egui/src/lib.rs` | 面板状态、偏好接线；窗口拖拽图片的接入点 |
@@ -157,19 +182,21 @@ UNDO begin → 逐行 Session::cmdline（等同手敲） → UNDO end
 
 | 检查 | 结果 |
 | --- | --- |
-| `cargo test -p cadcraft-ai` | 49 通过（含规则草稿真实执行、图片缩放/编码/上限测试） |
-| `cargo test -p cadcraft-ui-egui --lib` | 269 通过（含 9 个面板测试） |
+| `cargo test -p cadcraft-ai` | 58 通过（含规则草稿真实执行、图片缩放/编码、文档截断/预算测试） |
+| `cargo test -p cadcraft-ui-egui --lib` | 273 通过（含 13 个面板测试） |
 | `cargo clippy -p cadcraft-ai -p cadcraft-ui-egui --all-targets -- -D warnings` | 0 警告 |
 | `cargo fmt --check` | 通过 |
 | `cargo xtask layers` | 通过（17 crates，无违规） |
 | `cargo check -p cadcraft-ai --target wasm32-unknown-unknown` | 通过 |
 | 真实界面（Xvfb + lavapipe） | AI 助手为独立全高列；输入图片路径→缩略图→提问，离线回复以 `The offline engine sees no pixels.` 开头并生成 `circle 0,0 30`；应用后实体 46→47，一次 `UNDO`（Group）回到 46 |
+| 真实界面（文档，Xvfb + lavapipe） | 输入 `.md` 路径→「作为文档添加」→ 提问；回复以 `The offline engine cannot read documents.` 开头并生成 `circle 0,0 12`；应用后实体 46→47，一次 `UNDO` 回 46 |
 
 ## 7. 已知限制
 
 - **不会自动升级到上游**：衍生版移除了启动时的上游更新检查；**帮助 ▸ 检查更新…** 打开本项目的 Releases 页。请不要手动安装官方 CADCraft 覆盖本包——官方版本不含 AI 助手
 - 离线规则覆盖常见模板，不是通用自然语言理解，也**看不懂图片**（附图的离线回复会明确说明）；复杂需求请接入多模态大模型
 - 图片：单张 ≤ 16 MB、最长边 2048 px、每次最多 4 张；大图会转 JPEG（质量 88）；浏览器版的剪贴板读图不可用，请用拖拽
+- 文档：单份 ≤ 10 MB、每次最多 3 份、合计 6 万字符；PDF 只读文字层（扫描件需 OCR）；DOCX 只读正文，不含批注与页眉页脚
 - 暂不支持流式输出、草稿内联编辑（可“放弃”后重问）
 - 对话仅当前会话保留；只有 provider 设置会持久化；待发送的图片不持久化
 - 其他语言（uk/de/es 等）的新文案暂时回退英文；中文已完整
