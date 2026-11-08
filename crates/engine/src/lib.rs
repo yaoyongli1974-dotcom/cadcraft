@@ -67,6 +67,24 @@ pub use running::{PendingWindow, Running};
 pub use settings::Settings;
 pub use view::{ModelTile, ModelTiles, View};
 
+/// The derivative's own version. Upstream releases change [`build_version`]; AICAD releases
+/// change this one, so both numbers stay visible and independently meaningful.
+pub const AICAD_VERSION: &str = "0.0.3";
+
+/// `AICAD <derivative> (CADCraft <upstream>)`, what the app, its about window and `--version`
+/// say: the derivative version first, the upstream version it is based on in parentheses.
+pub fn aicad_version() -> &'static str {
+    static VERSION: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| format!("AICAD {} (CADCraft {})", AICAD_VERSION, env!("CARGO_PKG_VERSION")));
+    &VERSION
+}
+
+/// `<derivative> (CADCraft <upstream>)` without the product name, for a "Version …" label.
+pub fn version_pair() -> &'static str {
+    static VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| format!("{} (CADCraft {})", AICAD_VERSION, env!("CARGO_PKG_VERSION")));
+    &VERSION
+}
+
 /// `<version> (<commit>)`, what `--version` prints after the program name in the app and the CLI.
 /// The commit comes from `CADCRAFT_BUILD_SHA` at build time, `dev` without it.
 pub fn build_version() -> &'static str {

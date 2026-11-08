@@ -203,7 +203,7 @@ mod report {
         std::fs::create_dir_all(dir)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let mut text = String::new();
-        let _ = writeln!(text, "CADCraft {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+        let _ = writeln!(text, "{} on {} {}", cadcraft_engine::aicad_version(), std::env::consts::OS, std::env::consts::ARCH);
         let _ = writeln!(text, "Time: {} UTC", crate::autosave::utc(now.as_secs()));
         let _ = writeln!(text, "Thread: {}", std::thread::current().name().unwrap_or("unnamed"));
         if let Some(l) = info.location() {

@@ -1551,3 +1551,11 @@ fn setvar_rejects_non_finite_text_for_real_variables() {
         }
     }
 }
+
+#[test]
+fn the_version_names_the_derivative_and_the_upstream() {
+    let shown = crate::aicad_version();
+    assert!(shown.starts_with(&format!("AICAD {}", crate::AICAD_VERSION)), "{shown}");
+    assert!(shown.contains(&format!("CADCraft {}", env!("CARGO_PKG_VERSION"))), "{shown}");
+    assert_eq!(crate::version_pair(), format!("{} (CADCraft {})", crate::AICAD_VERSION, env!("CARGO_PKG_VERSION")));
+}

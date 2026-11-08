@@ -539,7 +539,7 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     p.text(
         pos2(left.left() + 34.0, left.top() + 98.0),
         egui::Align2::LEFT_CENTER,
-        crate::tf!("Version {version}", version = env!("CARGO_PKG_VERSION")),
+        crate::tf!("Version {version}", version = cadcraft_engine::version_pair()),
         crate::theme::small(),
         t.text_faint,
     );

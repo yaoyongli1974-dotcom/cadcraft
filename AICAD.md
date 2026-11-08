@@ -77,6 +77,9 @@ Rust 1.95 or newer (edition 2024).
 cargo run --release -p cadcraft -- --sample
 ```
 
+The version names both releases: `cadcraft --version` prints
+`AICAD 0.0.3 (CADCraft 0.17.0)` (derivative first, the upstream base in parentheses).
+
 Then open **Window ▸ AI Chat**, or run the headless entry points:
 
 ```sh

@@ -276,7 +276,8 @@ fn app_icon() -> Option<egui::IconData> {
 }
 
 fn version_string() -> String {
-    format!("cadcraft {}", cadcraft_engine::build_version())
+    // The same line clap prints: `cadcraft <derivative> (CADCraft <upstream>)`.
+    format!("cadcraft {}", cadcraft_engine::version_pair())
 }
 
 /// Parse CLI options (`--control`, `--sample`, files, `--version`), install logging and I/O hooks, build the services and app, and run eframe.
